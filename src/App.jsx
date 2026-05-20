@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 
 // === 假貼文資料 (Mock Data) ===
 const initialPosts = [
@@ -11,6 +11,7 @@ const initialPosts = [
     },
     time: '2 小時前',
     content: '剛剛收到一封簡訊說我抽中某某飆股的認購權，穩賺不賠，還要我加 LINE 老師的帳號，有人收到這個嗎？是不是詐騙啊？',
+    image: null,
     aiResult: {
       risk_type: 'SCAM',
       category: '投資理財詐騙',
@@ -19,6 +20,7 @@ const initialPosts = [
       explanation: '系統比對 165 反詐騙資料庫，發現該內容特徵與多起報案紀錄高度吻合。詐騙集團常以「穩賺不賠」、「飆股」等話術吸引被害人。',
       sources: ['https://165.gov.tw/']
     },
+    userVote: null,
     likes: 12,
     comments: 5,
     shares: 2
@@ -32,6 +34,7 @@ const initialPosts = [
     },
     time: '5 小時前',
     content: '分享一下，最近政府推出的節能家電退稅補助，只要在期限內購買符合標準的家電，就可以線上申請退款喔！網址在這：https://www.etax.nat.gov.tw/...',
+    image: null,
     aiResult: {
       risk_type: 'SAFE',
       category: '官方資訊',
@@ -40,14 +43,83 @@ const initialPosts = [
       explanation: '網址網域為 gov.tw，確認為中華民國政府官方網站。該項節能家電補助計畫目前確實正在進行中。',
       sources: []
     },
+    userVote: null,
     likes: 45,
     comments: 8,
     shares: 15
   }
 ];
 
+// === AI 隨機查核結果資料庫 ===
+const AI_VERDICTS = {
+  SCAM: [
+    {
+      category: '投資理財詐騙',
+      summary: '此訊息含有典型詐騙話術，強烈建議勿點擊任何連結或提供個人資料。',
+      explanation: '系統比對 165 反詐騙資料庫，發現該內容特徵與多起報案紀錄高度吻合。常見手法包括「高報酬保證」、「限時優惠」等心理操控技巧。',
+      sources: ['https://165.gov.tw/']
+    },
+    {
+      category: '假冒官方機構',
+      summary: '此訊息疑似假冒政府或金融機構，企圖騙取個人敏感資訊。',
+      explanation: '訊息中出現的官方名稱與聯絡方式與真實機構不符，且要求提供帳號密碼等高風險行為，研判為網路釣魚攻擊。',
+      sources: ['https://www.fsc.gov.tw/']
+    }
+  ],
+  MISINFO: [
+    {
+      category: '健康謠言',
+      summary: '此內容包含未經科學驗證的健康資訊，可能誤導民眾做出錯誤的醫療決策。',
+      explanation: '經查核，訊息中提及的療效缺乏臨床試驗佐證，且與衛福部公告的衛教資訊相違背。建議民眾以官方醫療機構公告為準。',
+      sources: ['https://www.mohw.gov.tw/']
+    },
+    {
+      category: '政治假訊息',
+      summary: '此內容含有斷章取義或刻意扭曲的政治資訊，屬於低可信度內容。',
+      explanation: '經比對多份原始新聞來源，該訊息在關鍵事實細節上有明顯偏差，疑似刻意散播以影響輿論。建議閱讀完整報導再做判斷。',
+      sources: ['https://tfc-taiwan.org.tw/']
+    }
+  ],
+  SAFE: [
+    {
+      category: '可信新聞報導',
+      summary: '此訊息內容與多家主流媒體的報導吻合，資訊可信度高。',
+      explanation: '經交叉比對三家以上媒體的報導，事件細節一致，且資訊來源可追溯至具公信力的官方聲明或記者現場採訪。',
+      sources: []
+    },
+    {
+      category: '官方公告資訊',
+      summary: '此訊息來源為政府官方管道，內容屬實且為最新公告。',
+      explanation: '網址或訊息來源已確認為政府官方機構，與官網公告內容完全一致，民眾可放心參考。',
+      sources: ['https://www.gov.tw/']
+    }
+  ]
+};
+
+// 隨機產生 AI 查核結果
+const generateAiResult = () => {
+  const types = ['SCAM', 'MISINFO', 'SAFE'];
+  const risk_type = types[Math.floor(Math.random() * types.length)];
+  const verdicts = AI_VERDICTS[risk_type];
+  const verdict = verdicts[Math.floor(Math.random() * verdicts.length)];
+
+  const scoreRange = {
+    SCAM:    { min: 0.85, max: 0.99 },
+    MISINFO: { min: 0.72, max: 0.91 },
+    SAFE:    { min: 0.88, max: 0.99 }
+  };
+  const { min, max } = scoreRange[risk_type];
+  const confidence_score = Math.random() * (max - min) + min;
+
+  return { risk_type, confidence_score, ...verdict };
+};
+
 export default function App() {
-  const [posts] = useState(initialPosts);
+  const [posts, setPosts] = useState(initialPosts);
+  const [inputValue, setInputValue] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedImage, setSelectedImage] = useState(null); // { url, name }
+  const fileInputRef = useRef(null);
 
   // 根據 risk_type 決定 AI 查證卡片的樣式
   const getAiCardStyle = (riskType) => {
@@ -63,11 +135,74 @@ export default function App() {
     }
   };
 
+  // 圖片選取處理
+  const handleImageChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setSelectedImage({
+      url: URL.createObjectURL(file),
+      name: file.name,
+    });
+    // 清空 file input，確保同一張圖可重複選取
+    e.target.value = '';
+  };
+
+  // 取消圖片選取
+  const handleRemoveImage = () => {
+    if (selectedImage?.url) URL.revokeObjectURL(selectedImage.url);
+    setSelectedImage(null);
+  };
+
+  // 群眾投票：同一選項再點 → 取消，不同選項 → 切換
+  const handleVote = (postId, voteType) => {
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === postId
+          ? { ...p, userVote: p.userVote === voteType ? null : voteType }
+          : p
+      )
+    );
+  };
+
+  // 發文處理函式（文字 OR 圖片至少一者才可送出）
+  const handleSubmit = () => {
+    if (!inputValue.trim() && !selectedImage) return;
+
+    setIsSubmitting(true);
+    const imageUrl = selectedImage?.url ?? null;
+
+    setTimeout(() => {
+      const newPost = {
+        id: Date.now(),
+        author: {
+          name: '我',
+          avatar: 'https://ui-avatars.com/api/?name=User&background=E0E7FF&color=4F46E5',
+          handle: '@me'
+        },
+        time: '剛剛',
+        content: inputValue.trim(),
+        image: imageUrl,
+        aiResult: generateAiResult(),
+        userVote: null,
+        likes: 0,
+        comments: 0,
+        shares: 0
+      };
+
+      setPosts((prev) => [newPost, ...prev]);
+      setInputValue('');
+      setSelectedImage(null);
+      setIsSubmitting(false);
+    }, 1500);
+  };
+
+  // 發布按鈕是否可點擊
+  const canSubmit = !isSubmitting && (inputValue.trim() !== '' || selectedImage !== null);
+
   return (
-    // 整體佈局：淺灰背景，滿版高度
     <div className="min-h-screen bg-gray-50 font-sans text-gray-900">
-      
-      {/* 頂部導覽列 (Navbar) */}
+
+      {/* 頂部導覽列 */}
       <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-200 px-4 py-3 flex justify-center">
         <div className="w-full max-w-2xl flex items-center justify-between">
           <div className="text-xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-blue-500 tracking-tight">
@@ -79,39 +214,94 @@ export default function App() {
         </div>
       </nav>
 
-      {/* 內容區塊：置中且最大寬度為 max-w-2xl */}
       <main className="w-full max-w-2xl mx-auto flex flex-col pt-6 pb-20 px-4 sm:px-0 gap-6">
-        
-        {/* === 發文區塊 (Create Post) === */}
+
+        {/* === 發文區塊 === */}
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 flex gap-4">
-          <img 
-            src="https://ui-avatars.com/api/?name=User&background=E0E7FF&color=4F46E5" 
-            alt="My Avatar" 
+          <img
+            src="https://ui-avatars.com/api/?name=User&background=E0E7FF&color=4F46E5"
+            alt="My Avatar"
             className="w-10 h-10 rounded-full flex-shrink-0"
           />
           <div className="flex-1 flex flex-col gap-3">
-            <textarea 
+            <textarea
               className="w-full bg-transparent resize-none outline-none text-[16px] placeholder-gray-400 min-h-[60px]"
               placeholder="分享可疑的新聞、連結或截圖..."
-            ></textarea>
-            <div className="flex justify-end border-t border-gray-50 pt-3">
-              <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-full font-medium transition-colors text-sm shadow-sm flex items-center gap-2">
-                <span>✨</span> 發布並讓 AI 查證
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              disabled={isSubmitting}
+            />
+
+            {/* 圖片預覽區 */}
+            {selectedImage && (
+              <div className="relative w-fit">
+                <img
+                  src={selectedImage.url}
+                  alt="預覽圖"
+                  className="max-h-48 rounded-xl border border-gray-200 object-cover shadow-sm"
+                />
+                <button
+                  onClick={handleRemoveImage}
+                  className="absolute -top-2 -right-2 w-6 h-6 bg-gray-800 text-white rounded-full text-xs flex items-center justify-center hover:bg-red-500 transition-colors shadow-md"
+                  title="移除圖片"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* 工具列：附圖按鈕 + 發布按鈕 */}
+            <div className="flex items-center justify-between border-t border-gray-100 pt-3">
+              {/* 隱藏的 file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleImageChange}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isSubmitting}
+                className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                🖼️ 附上截圖
+              </button>
+
+              <button
+                onClick={handleSubmit}
+                disabled={!canSubmit}
+                className={`px-5 py-2 rounded-full font-medium transition-all text-sm shadow-sm flex items-center gap-2 ${
+                  !canSubmit
+                    ? 'bg-indigo-300 text-white cursor-not-allowed'
+                    : 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
+                }`}
+              >
+                {isSubmitting ? (
+                  <>
+                    <span className="inline-block animate-spin">⏳</span>
+                    AI 查證中...
+                  </>
+                ) : (
+                  <>
+                    <span>✨</span> 發布並讓 AI 查證
+                  </>
+                )}
               </button>
             </div>
           </div>
         </div>
 
-        {/* === 貼文列表 (News Feed) === */}
+        {/* === 貼文列表 === */}
         <div className="flex flex-col gap-5">
           {posts.map((post) => (
             <article key={post.id} className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 transition-shadow hover:shadow-md">
-              
-              {/* 發文者資訊區塊 */}
+
+              {/* 發文者資訊 */}
               <div className="flex items-center gap-3 mb-3">
-                <img 
-                  src={post.author.avatar} 
-                  alt={post.author.name} 
+                <img
+                  src={post.author.avatar}
+                  alt={post.author.name}
                   className="w-10 h-10 rounded-full flex-shrink-0"
                 />
                 <div className="flex flex-col flex-1">
@@ -124,35 +314,52 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 使用者原本的內文 */}
-              <div className="text-gray-800 text-[15px] sm:text-[16px] leading-relaxed mb-4 whitespace-pre-wrap">
-                {post.content}
-              </div>
+              {/* 貼文內文 */}
+              {post.content && (
+                <div className="text-gray-800 text-[15px] sm:text-[16px] leading-relaxed mb-3 whitespace-pre-wrap">
+                  {post.content}
+                </div>
+              )}
 
-              {/* AI 查證結果卡片 (嵌入於發文下方) */}
+              {/* 貼文圖片 */}
+              {post.image && (
+                <div className="mb-4 rounded-xl overflow-hidden border border-gray-100 shadow-sm">
+                  <img
+                    src={post.image}
+                    alt="貼文附圖"
+                    className="w-full max-h-80 object-cover"
+                  />
+                </div>
+              )}
+
+              {/* AI 查證結果卡片 */}
               {post.aiResult && (() => {
                 const style = getAiCardStyle(post.aiResult.risk_type);
                 return (
-                  <div className={`mt-2 mb-4 rounded-xl border ${style.border} ${style.bg} overflow-hidden shadow-sm`}>
-                    
-                    {/* 卡片標頭 (顯示判斷與信心分數) */}
+                  <div className={`mt-1 mb-4 rounded-xl border ${style.border} ${style.bg} overflow-hidden shadow-sm`}>
+
+                    {/* 卡片標頭 */}
                     <div className={`px-4 py-2.5 border-b ${style.border} bg-white/40 flex items-center justify-between flex-wrap gap-2`}>
                       <h3 className={`font-bold flex items-center gap-1.5 text-sm sm:text-base ${style.text}`}>
                         <span>{style.icon}</span>
                         {style.title}：{post.aiResult.category}
                       </h3>
                       <div className="text-xs font-medium text-gray-600 bg-white/60 px-2.5 py-1 rounded-md shadow-sm border border-white/80">
-                        AI 準確度 <span className={`font-bold ${style.text}`}>{post.aiResult.confidence_score ? `${(post.aiResult.confidence_score * 100).toFixed(0)}%` : 'N/A'}</span>
+                        AI 準確度 <span className={`font-bold ${style.text}`}>
+                          {post.aiResult.confidence_score
+                            ? `${(post.aiResult.confidence_score * 100).toFixed(0)}%`
+                            : 'N/A'}
+                        </span>
                       </div>
                     </div>
 
-                    {/* 卡片內容 (摘要與解釋) */}
+                    {/* 卡片內容：摘要、解釋、來源 */}
                     <div className="p-4 flex flex-col gap-3">
                       <div>
                         <h4 className="text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1">AI 查證摘要</h4>
                         <p className="text-[14px] font-medium text-gray-800 leading-relaxed">{post.aiResult.summary}</p>
                       </div>
-                      
+
                       <div>
                         <h4 className="text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1">風險詳細解釋</h4>
                         <p className="text-[14px] text-gray-600 leading-relaxed">{post.aiResult.explanation}</p>
@@ -163,11 +370,11 @@ export default function App() {
                           <h4 className="text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1">相關參考來源</h4>
                           <div className="flex flex-wrap gap-2 mt-2">
                             {post.aiResult.sources.map((source, idx) => (
-                              <a 
-                                key={idx} 
-                                href={source} 
-                                target="_blank" 
-                                rel="noopener noreferrer" 
+                              <a
+                                key={idx}
+                                href={source}
+                                target="_blank"
+                                rel="noopener noreferrer"
                                 className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline inline-flex items-center gap-1 bg-white px-2 py-1 rounded border border-indigo-100 transition-colors shadow-sm"
                               >
                                 🔗 點此查看來源
@@ -176,12 +383,41 @@ export default function App() {
                           </div>
                         </div>
                       )}
+
+                      {/* === 群眾投票區塊 === */}
+                      <div className="pt-3 mt-1 border-t border-black/5 flex items-center gap-3 flex-wrap">
+                        <span className="text-[13px] text-gray-500 font-medium">你覺得 AI 判斷準確嗎？</span>
+                        <div className="flex items-center gap-2">
+                          {/* 同意按鈕 */}
+                          <button
+                            onClick={() => handleVote(post.id, 'up')}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                              post.userVote === 'up'
+                                ? 'bg-blue-100 border-blue-300 text-blue-700 shadow-inner'
+                                : 'bg-white border-gray-200 text-gray-500 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600'
+                            }`}
+                          >
+                            👍 同意
+                          </button>
+                          {/* 報錯按鈕 */}
+                          <button
+                            onClick={() => handleVote(post.id, 'down')}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                              post.userVote === 'down'
+                                ? 'bg-red-100 border-red-300 text-red-700 shadow-inner'
+                                : 'bg-white border-gray-200 text-gray-500 hover:bg-red-50 hover:border-red-200 hover:text-red-600'
+                            }`}
+                          >
+                            👎 報錯
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 );
               })()}
 
-              {/* 底部互動區 (讚、留言、分享) */}
+              {/* 底部互動區 */}
               <div className="flex items-center justify-between text-gray-500 pt-3 border-t border-gray-100 px-2 sm:px-8">
                 <button className="flex items-center gap-2 hover:text-red-500 transition-colors group p-2 rounded-full hover:bg-red-50">
                   <span className="text-[18px] group-hover:scale-110 transition-transform grayscale group-hover:grayscale-0">❤️</span>
